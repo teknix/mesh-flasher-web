@@ -30,20 +30,20 @@ describe('checkNames', () => {
 })
 
 describe('resolveBoard', () => {
-  const supported = ['heltec-v4']
-  it('prefers pioEnv', () => {
-    expect(resolveBoard({ pioEnv: 'heltec-v4', hwModel: 999 }, supported)).toMatchObject({ boardId: 'heltec-v4', supported: true })
+  const boards = { 'heltec-v4': { hwModel: 110, displayName: 'Heltec V4' } }
+  it('matches by hwModel number first', () => {
+    expect(resolveBoard({ pioEnv: 'other', hwModel: 110 }, boards)).toMatchObject({ boardId: 'heltec-v4', supported: true, label: 'Heltec V4' })
   })
-  it('falls back to hwModel 110', () => {
-    expect(resolveBoard({ hwModel: 110 }, supported)).toMatchObject({ boardId: 'heltec-v4', supported: true })
+  it('falls back to pioEnv == board id', () => {
+    expect(resolveBoard({ pioEnv: 'heltec-v4' }, boards)).toMatchObject({ boardId: 'heltec-v4', supported: true })
   })
-  it('refuses a known board the group does not support', () => {
-    const r = resolveBoard({ hwModel: 43, pioEnv: 'heltec-v3' }, supported)
+  it('refuses a known board the group does not support, naming it', () => {
+    const r = resolveBoard({ hwModel: 43, pioEnv: 'heltec-v3' }, boards)
     expect(r.supported).toBe(false)
     expect(r.label).toBe('heltec-v3')
   })
   it('refuses unknown models and names them', () => {
-    expect(resolveBoard({ hwModel: 7777 }, supported)).toMatchObject({ supported: false, label: 'model number 7777' })
-    expect(resolveBoard({}, supported).supported).toBe(false)
+    expect(resolveBoard({ hwModel: 7777 }, boards)).toMatchObject({ supported: false, label: 'model number 7777' })
+    expect(resolveBoard({}, boards).supported).toBe(false)
   })
 })

@@ -28,18 +28,21 @@ export function normalizePioEnv(s: string | undefined): string {
   return (s || '').trim().toLowerCase()
 }
 
-/** `supported` is the list of board ids from /api/config (`firmware.boards` keys). */
-export function resolveBoard(info: BoardInfo, supported: string[]): BoardResolution {
+export interface BoardEntry { hwModel?: number, displayName?: string, requiresDfu?: boolean }
+
+/** `boards` = `firmware.boards` from /api/config. Match by hwModel number first, then pioEnv == board id. */
+export function resolveBoard(info: BoardInfo, boards: Record<string, BoardEntry>): BoardResolution {
   const env = normalizePioEnv(info.pioEnv)
-  const set = new Set(supported)
-  // pioEnv is the better key (tells V4 from V4 R8). Use it first.
-  if (env && set.has(env)) return { boardId: env, supported: true, label: env }
-  if (info.hwModel !== undefined && HW_MODEL_BOARD[info.hwModel]) {
-    const id = HW_MODEL_BOARD[info.hwModel]!
-    return { boardId: id, supported: set.has(id), label: env || id }
+  if (info.hwModel !== undefined) {
+    const hit = Object.entries(boards).find(([, b]) => b.hwModel === info.hwModel)
+    if (hit) return { boardId: hit[0], supported: true, label: hit[1].displayName || hit[0] }
   }
+  if (env && boards[env]) return { boardId: env, supported: true, label: boards[env]!.displayName || env }
   if (env) return { boardId: undefined, supported: false, label: env }
-  if (info.hwModel !== undefined) return { boardId: undefined, supported: false, label: `model number ${info.hwModel}` }
+  if (info.hwModel !== undefined) {
+    const known = HW_MODEL_BOARD[info.hwModel]
+    return { boardId: undefined, supported: false, label: known || `model number ${info.hwModel}` }
+  }
   return { boardId: undefined, supported: false, label: 'unknown model' }
 }
 

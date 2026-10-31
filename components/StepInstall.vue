@@ -14,12 +14,27 @@
           Choose...
         </option>
         <option v-for="b in boards" :key="b" :value="b">
-          {{ b }}
+          {{ cfgBoards[b]?.displayName || b }}
         </option>
       </select>
     </label>
 
-    <div v-if="state.busy" class="mt-5" role="status">
+    <div v-if="needsDfuScreen" class="mt-5">
+      <img src="/img/heltec_v4.svg" alt="The radio, with the PRG and RST buttons on its side" class="w-full max-w-[260px] mx-auto">
+      <ol class="mt-4 space-y-2 text-base list-decimal ps-5">
+        <li>Hold down the PRG button.</li>
+        <li>While holding it, tap RST once.</li>
+        <li>Let go of PRG.</li>
+      </ol>
+      <p class="mt-3 text-sm text-theme-muted">
+        It's safe. This can't break the radio.
+      </p>
+      <button type="button" class="btn-primary w-full mt-5 min-h-[52px] text-base" @click="state.dfuReady = true">
+        I did that
+      </button>
+    </div>
+
+    <div v-else-if="state.busy" class="mt-5" role="status">
       <p class="text-base">
         {{ state.installPhase === 'download' ? 'Getting the software...' : state.installPhase === 'restart' ? 'Restarting the radio...' : 'Installing...' }}
       </p>
@@ -28,6 +43,9 @@
       </div>
       <p class="mt-2 text-sm text-theme-muted">
         {{ state.installPercent }}%
+      </p>
+      <p v-if="state.installPhase === 'restart'" class="mt-2 text-sm text-theme-muted">
+        If the radio doesn't come back on its own, tap RST once.
       </p>
       <p class="mt-3 text-base font-semibold">
         Don't unplug, don't close this page, about 3 minutes.
@@ -49,7 +67,10 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useSetup } from '~/composables/useSetup'
 
-const { state, boards, installSoftware } = useSetup()
+const { state, boards, board, installSoftware } = useSetup()
+const cfgBoards = computed(() => state.cfg?.firmware.boards ?? {})
+const needsDfuScreen = computed(() => !!state.boardId && !!board.value?.requiresDfu && !state.dfuReady && !state.busy)
 </script>

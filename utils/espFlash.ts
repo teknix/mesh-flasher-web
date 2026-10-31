@@ -4,9 +4,21 @@ import { matchesSha256 } from './sha256'
 import { openPortWithRetry } from './serialTransport'
 
 
+export interface FlashEntry { name: string, address: string }
+export interface BoardFirmware {
+  hwModel?: number
+  displayName?: string
+  mcu?: string
+  requiresDfu?: boolean
+  partitionScheme?: string
+  /** Full install: erase everything, write each entry at its address. */
+  clean: FlashEntry[]
+  update?: FlashEntry[]
+}
+
 export interface FirmwareInfo {
   version: string
-  boards: Record<string, { factory: string, app?: string, bleota?: string, littlefs?: string }>
+  boards: Record<string, BoardFirmware>
   files: Record<string, { sha256: string, size: number }>
   base: string
 }
@@ -65,16 +77,22 @@ const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
 
 export interface FlashOptionsIn {
   port: SerialPort
-  /** Full image (the board's *.factory.bin), written at 0x0 after a full erase. */
-  image: Uint8Array
+  /** Verified images with their flash addresses (the board's `clean` list), written after a full erase. */
+  images: Array<{ data: Uint8Array, address: number }>
   onProgress?: (percent: number) => void
 }
 
+export function parseAddress(a: string): number {
+  const n = Number(a)
+  if (!Number.isInteger(n) || n < 0) throw new FirmwareError('Bad install address in the group settings.', 'download')
+  return n
+}
+
 /**
- * Erase and write the factory image, hard-reset and close esptool's handle. Follow with
+ * Erase and write every image at its address, hard-reset and close esptool's handle. Follow with
  * reacquirePort() before talking to the radio again.
  */
-export async function flashFactory({ port, image, onProgress }: FlashOptionsIn): Promise<void> {
+export async function flashImages({ port, images, onProgress }: FlashOptionsIn): Promise<void> {
   const transport = new Transport(port, false)
   let loader: ESPLoader
   try {
@@ -83,17 +101,17 @@ export async function flashFactory({ port, image, onProgress }: FlashOptionsIn):
   }
   catch (e) {
     try { await transport.disconnect() } catch { /* ignore */ }
-    throw new FirmwareError('Could not talk to the radio\'s installer. Hold the PRG button, tap RST, let go of PRG, then try again.', 'connect')
+    throw new FirmwareError('Could not talk to the radio\'s installer. Put the radio in install mode again (hold PRG, tap RST, let go of PRG), then try again.', 'connect')
   }
   try {
     await loader.writeFlash({
-      fileArray: [{ data: toBinaryString(image), address: 0x0 }],
+      fileArray: images.map(i => ({ data: toBinaryString(i.data), address: i.address })),
       flashSize: 'keep',
       flashMode: 'keep',
       flashFreq: 'keep',
       eraseAll: true,
       compress: true,
-      reportProgress: (_i, written, total) => onProgress?.(total ? Math.round((written / total) * 100) : 0),
+      reportProgress: (i, written, total) => onProgress?.(total ? Math.round(((i + written / total) / images.length) * 100) : 0),
     } as FlashOptions)
   }
   catch {
