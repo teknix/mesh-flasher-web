@@ -22,7 +22,7 @@ export interface GroupChannel {
 }
 
 export interface GroupConfig {
-  lora: { region: string, modemPreset: string, hopLimit: number, txPower: number }
+  lora: { region: string, modemPreset: string, hopLimit: number, txPower: number, channelNum?: number }
   channels: GroupChannel[]
   mqtt: {
     address: string
@@ -212,6 +212,9 @@ export function buildPlan(config: GroupConfig, names: Names, base?: Snapshot): P
         hopLimit: config.lora.hopLimit,
         txEnabled: true,
         txPower: config.lora.txPower,
+        // frequency slot; 0 = derived from the primary channel name. Groups that should
+        // hear each other carry the same number. Left alone when the config has none.
+        ...(config.lora.channelNum !== undefined ? { channelNum: config.lora.channelNum } : {}),
       },
     },
   })
@@ -258,6 +261,9 @@ export function buildPlan(config: GroupConfig, names: Names, base?: Snapshot): P
     { id: 'lora.usePreset', label: 'Use a preset', expected: true, read: s => s.lora?.usePreset },
     { id: 'lora.modemPreset', label: 'Speed preset', expected: preset, read: s => s.lora?.modemPreset },
     { id: 'lora.hopLimit', label: 'Hop limit', expected: config.lora.hopLimit, read: s => s.lora?.hopLimit },
+    ...(config.lora.channelNum !== undefined
+      ? [{ id: 'lora.channelNum', label: 'Frequency slot', expected: config.lora.channelNum, read: (s: Snapshot) => s.lora?.channelNum } as Expectation]
+      : []),
     { id: 'network.wifiEnabled', label: 'WiFi off', expected: false, read: s => s.network?.wifiEnabled },
     { id: 'device.role', label: 'Radio role', expected: role, read: s => s.device?.role },
     { id: 'mqtt.enabled', label: 'Internet link on', expected: true, read: s => s.mqtt?.enabled },

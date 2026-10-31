@@ -40,6 +40,8 @@ describe('buildPlan', () => {
     expect(v.modemPreset).toBe(Protobuf.Config.Config_LoRaConfig_ModemPreset.LONG_FAST)
     expect(v.usePreset).toBe(true)
     expect(v.hopLimit).toBe(3)
+    const slotted = buildPlan({ ...config, lora: { ...config.lora, channelNum: 20 } }, names)
+    expect((slotted.lora.payloadVariant.value as Protobuf.Config.Config_LoRaConfig).channelNum).toBe(20)
     expect(v.txEnabled).toBe(true)
   })
   it('turns WiFi off and sets the role', () => {
