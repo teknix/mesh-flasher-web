@@ -41,9 +41,14 @@ export interface GroupConfig {
 export interface Names { longName: string, shortName: string }
 
 export class SetupError extends Error {
-  constructor(message: string, public stepId?: string, public override cause?: unknown) {
+  // Plain fields (no parameter properties) so Node can run this file with type-stripping only.
+  stepId?: string
+  cause?: unknown
+  constructor(message: string, stepId?: string, cause?: unknown) {
     super(message)
     this.name = 'SetupError'
+    this.stepId = stepId
+    this.cause = cause
   }
 }
 

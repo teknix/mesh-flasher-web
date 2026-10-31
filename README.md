@@ -1,40 +1,45 @@
-[![Vercel](https://img.shields.io/static/v1?label=Powered%20by&message=Vercel&style=flat&logo=vercel&color=000000)](https://vercel.com?utm_source=meshtastic&utm_campaign=oss)
-[![CLA assistant](https://cla-assistant.io/readme/badge/meshtastic/web-flasher)](https://cla-assistant.io/meshtastic/web-flasher)
+# Group radio setup
 
-# Meshtastic Web Flasher
+A single-page web app that walks a member of a community group through setting up a LoRa mesh radio (for Meshtastic radios): sign in, plug in, install the radio's software, name the radio, write the group's settings, and check that they took. Everything the page talks to is on its own origin (`/api`, `/firmware`); there is no third-party script, analytics or font.
 
-## Introduction
-Welcome to the Meshtastic Web Flasher - a user-friendly, robust tool designed for flashing Meshtastic devices. Leveraging the power of Nuxt/Vue and Tailwind CSS, this web application offers an easy-to-use interface for device flashing.
+This is a fork of [meshtastic/web-flasher](https://github.com/meshtastic/web-flasher), which is licensed under the GNU GPL v3 (see `LICENSE`). Upstream copyright and license notices are kept. This project is not affiliated with or endorsed by the Meshtastic project; "Meshtastic" is used only to describe which radios the page works with.
 
-## Key Features
-- **Espressif's esptool.js Integration**: Incorporates the official JavaScript port of Espressif's esptool for enhanced robustness and compatibility with newer Espressif silicon.
-- **All-in-One Platform Support**: Designed to be a comprehensive solution, supporting a wide range of devices including nRF52 and Pico UF2.
-- **Developer-Friendly Design**: Built with Nuxt/Vue, simplifying the development and maintenance process.
-- **Built-in Serial Monitor**: The built-in Serial Monitor allows debugging and troubleshooting of issues encountered on Meshtastic devices via the native serial logging interface.
+Modified by Turbulent Resistance, 2026-10-31: group setup flow. The upstream flashing wizard, survey, analytics, cookie banner, fastboot, Rockchip and BLE tools were removed.
 
-## Getting Started
-To use the Meshtastic Web Flasher, simply visit [https://flasher.meshtastic.org](https://flasher.meshtastic.org). The website is designed to be intuitive and easy to navigate, allowing you to start flashing your devices right away.
+License: GPL-3.0. The footer of every page shows the commit this build was made from; `/version.json` has the same.
 
-## Contributing
-Interested in contributing? Here's how you can get involved:
+## How it works
 
-1. Clone this repository.
-2. Make sure to install the dependencies:
+| piece | file |
+| --- | --- |
+| flow state machine | `composables/useSetup.ts` |
+| browser gate (Chrome/Edge on a computer) | `utils/browserGate.ts` |
+| same-origin API client | `utils/api.ts` |
+| per-connection serial transport | `utils/serialTransport.ts`, `utils/meshSession.ts` |
+| install firmware (esptool-js, SHA-256 checked first) | `utils/espFlash.ts`, `utils/sha256.ts` |
+| build / write / verify group config (transport-agnostic) | `utils/groupSetup.ts` |
+| board and name helpers | `utils/board.ts` |
+| screens | `components/Step*.vue`, `app.vue` |
+
+The backend is expected to serve `GET /api/site`, `/api/me`, `/api/config`, `POST /api/login/zulip`, `GET /api/login/matrix`, `POST /api/check-uplink` and `/firmware/<version>/<file>`.
+
+## Develop
+
 ```bash
 pnpm install
+pnpm vitest run          # unit tests (pure functions, node environment)
+pnpm dev                 # forwards /api, /firmware, /admin to http://127.0.0.1:5000 (BACKEND_URL overrides)
+pnpm generate            # static site in .output/public
 ```
-3. Start the development server on `http://localhost:3000`:
+
+The footer commit comes from `NUXT_PUBLIC_COMMIT`, falling back to `git rev-parse --short HEAD`. `public/version.json` is written at build time.
+
+## Hardware spike
+
+`scripts/hw-spike.mjs` runs the same write-and-verify code from Node against a radio on a serial port (needs Node 24 for TypeScript stripping and `serialport`):
+
 ```bash
-pnpm run dev
+node scripts/hw-spike.mjs --port /dev/ttyACM0 --config config.json --name "Dee Smith" --short DS
 ```
 
-Check out the full Nuxt [deployment documentation](https://nuxt.com/docs/getting-started/deployment#presets) for more information.
-
-## Feedback and Support
-For bug reports, feature requests, or general queries, please open an issue in this repository. Your feedback helps us improve and evolve the Meshtastic Web Flasher.
-
-Thank you for using and supporting the Meshtastic Web Flasher.
-
-## Stats
-
-![Alt](https://repobeats.axiom.co/api/embed/b5590d57a9c3443c86121c36ded22aeb28f709d2.svg "Repobeats analytics image")
+`config.json` is the `config` object from `/api/config`. Channel keys and the MQTT password are never printed.
