@@ -12,10 +12,6 @@
   },
   "extends": "./.nuxt/tsconfig.json",
   "compilerOptions": {
-    "types": [
-      "@pinia/nuxt",
-      "@zip.js/zip.js",
-      "esptool-js"
-    ]
+    "types": ["esptool-js", "w3c-web-serial"]
   }
 }

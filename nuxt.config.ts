@@ -1,115 +1,61 @@
 // nuxt.config.ts
 import { defineNuxtConfig } from 'nuxt/config'
+import { execSync } from 'node:child_process'
+import { mkdirSync, writeFileSync } from 'node:fs'
 
-// Origin the built app's `api/...` calls resolve to, and the default target of the
-// dev proxy below — so one variable moves the whole app between API deployments.
-// api.meshtastic.org is the Cloudflare Worker rewrite of api.meshtastic.org;
-// API_ORIGIN=https://api.meshtastic.org rolls back to the Railway server.
-const apiOrigin = process.env.API_ORIGIN || 'https://api.meshtastic.org'
+// Build identity shown in the footer and written to public/version.json.
+function gitCommit(): string {
+  try {
+    return execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim()
+  }
+  catch {
+    return 'unknown'
+  }
+}
+const commit = process.env.NUXT_PUBLIC_COMMIT || gitCommit()
+const builtAt = new Date().toISOString()
 
-const ignoredDevWatchPaths = [
-  '**/.claude/**',
-  '**/.git/**',
-  '**/.nuxt/**',
-  '**/.output/**',
-  '**/.playwright-mcp/**',
-  '**/test-results/**',
-]
+// Backend (Flask) that serves /api, /firmware and /admin in production.
+const backend = process.env.BACKEND_URL || 'http://127.0.0.1:5000'
+
+// Written at config load so `public/version.json` ships in dev, build and generate.
+mkdirSync('public', { recursive: true })
+writeFileSync('public/version.json', JSON.stringify({ commit, builtAt }) + '\n')
 
 export default defineNuxtConfig({
-
-  modules: ['@pinia/nuxt', '@vite-pwa/nuxt', '@nuxtjs/i18n', '@nuxt/eslint'],
+  modules: ['@nuxt/eslint'],
 
   ssr: false,
-  devtools: { enabled: true },
+  devtools: { enabled: false },
 
   app: {
     head: {
-      script: process.env.COOKIEYES_CLIENT_ID
-        ? [
-            {
-              src: `https://cdn-cookieyes.com/client_data/${process.env.COOKIEYES_CLIENT_ID}/script.js`,
-              async: true,
-            },
-          ]
-        : [],
+      htmlAttrs: { lang: 'en', 'data-theme': 'dark' },
+      title: 'Radio setup',
+      meta: [
+        { name: 'viewport', content: 'width=device-width, initial-scale=1' },
+        { name: 'color-scheme', content: 'dark' },
+      ],
     },
   },
   css: ['~/assets/css/main.css'],
 
   runtimeConfig: {
-    public: {
-      datadogApplicationId: process.env.DATADOG_APPLICATION_ID || '',
-      datadogClientToken: process.env.DATADOG_CLIENT_TOKEN || '',
-      datadogEnv: process.env.NODE_ENV || 'production',
-      cookieyesClientId: process.env.COOKIEYES_CLIENT_ID || '',
-      // Alphanaut feedback tool (2.8 bug reporter). Empty URL = feature disabled.
-      feedbackWebhookUrl: process.env.FEEDBACK_WEBHOOK_URL || '',
-      // NOTE: public runtime config ships in the browser bundle, so this token is
-      // intentionally NOT a secret — it is only a best-effort speed-bump against
-      // low-effort bots hitting the "Anyone"-access Apps Script endpoint. This is
-      // an SPA (ssr: false) with no server runtime to proxy through; real controls
-      // are the Apps Script's required-field validation, size caps, and kill switch.
-      feedbackToken: process.env.FEEDBACK_TOKEN || '',
-      // DEF CON 34 post-event survey. Empty URL = feature disabled, same
-      // convention as the feedback tool above. The Turnstile SITE key is public
-      // by design; its secret lives only in the Apps Script project.
-      surveyWebhookUrl: process.env.SURVEY_WEBHOOK_URL || '',
-      turnstileSiteKey: process.env.TURNSTILE_SITE_KEY || '',
-    },
+    public: { commit },
   },
-  ignore: ignoredDevWatchPaths,
 
   routeRules: {
-    // prerender index route by default
     '/': { prerender: true },
-  },
-
-  watchers: {
-    chokidar: {
-      ignored: ignoredDevWatchPaths,
-    },
   },
 
   compatibilityDate: '2024-09-03',
 
-  vite: {
-    plugins: [],
-    // Vite statically replaces `process.env.NODE_ENV` and nothing else; in the
-    // browser `process.env` is an empty unenv shim. Inline the API origin the
-    // same way so stores/store.ts reads a real value client-side.
-    define: {
-      'process.env.API_ORIGIN': JSON.stringify(apiOrigin),
-    },
-    // xz-decompress is a UMD bundle (with inlined WASM). Pre-bundle it so esbuild
-    // takes its CommonJS branch; served raw, its UMD global path dereferences an
-    // undefined `this` in ESM context and throws.
-    optimizeDeps: {
-      include: ['xz-decompress'],
-    },
-    server: {
-      watch: {
-        ignored: ignoredDevWatchPaths,
-      },
-      hmr: {
-        overlay: true, // Enable HMR overlay for errors
-      },
-      proxy: {
-        '^/api/.*': {
-          // Follows API_ORIGIN by default; point at a local API instance with
-          // e.g. API_PROXY_TARGET=http://localhost:4000 pnpm dev
-          target: process.env.API_PROXY_TARGET ?? apiOrigin,
-          changeOrigin: true,
-          followRedirects: true,
-          rewrite: path => path.replace(/^\/api/, ''),
-          secure: false,
-          headers: {
-            Accept: 'application/octet-stream',
-            Origin: 'https://flash.meshtastic.org',
-            Referer: 'https://flash.meshtastic.org/',
-          },
-        },
-      },
+  nitro: {
+    // `pnpm dev` forwards the backend routes to the Flask app.
+    devProxy: {
+      '/api': { target: `${backend}/api`, changeOrigin: true },
+      '/firmware': { target: `${backend}/firmware`, changeOrigin: true },
+      '/admin': { target: `${backend}/admin`, changeOrigin: true },
     },
   },
 
@@ -124,116 +70,5 @@ export default defineNuxtConfig({
       stylistic: true,
       typescript: true,
     },
-  },
-  i18n: {
-    locales: [
-      {
-        code: 'en',
-        name: 'English',
-        file: 'en.json',
-      },
-      {
-        code: 'bg',
-        name: 'Български',
-        file: 'bg.json',
-      },
-      {
-        code: 'cs',
-        name: 'Čeština',
-        file: 'cs.json',
-      },
-      {
-        code: 'de',
-        name: 'Deutsch',
-        file: 'de.json',
-      },
-      {
-        code: 'es',
-        name: 'Español',
-        file: 'es.json',
-      },
-      {
-        code: 'fi',
-        name: 'Suomi',
-        file: 'fi.json',
-      },
-      {
-        code: 'fr',
-        name: 'Français',
-        file: 'fr.json',
-      },
-      {
-        code: 'it',
-        name: 'Italiano',
-        file: 'it.json',
-      },
-      {
-        code: 'ja',
-        name: '日本語',
-        file: 'ja.json',
-      },
-      {
-        code: 'nl',
-        name: 'Nederlands',
-        file: 'nl.json',
-      },
-      {
-        code: 'pt',
-        name: 'Português',
-        file: 'pt.json',
-      },
-      {
-        code: 'pl',
-        name: 'Polski',
-        file: 'pl.json',
-      },
-      {
-        code: 'ru',
-        name: 'Русский',
-        file: 'ru.json',
-      },
-      {
-        code: 'sv',
-        name: 'Svenska',
-        file: 'sv.json',
-      },
-      {
-        code: 'uk',
-        name: 'Українська',
-        file: 'uk.json',
-      },
-      {
-        code: 'tr',
-        name: 'Türkçe',
-        file: 'tr.json',
-      },
-      {
-        code: 'zh-Hans',
-        name: '简体中文',
-        file: 'zh-Hans.json',
-      },
-      {
-        code: 'zh-Hant',
-        name: '繁體中文',
-        file: 'zh-Hant.json',
-      },
-    ],
-    defaultLocale: 'en',
-    lazy: true,
-    langDir: 'locales/',
-    strategy: 'no_prefix',
-    vueI18n: '../i18n.config.ts',
-    bundle: {
-      optimizeTranslationDirective: false,
-    },
-    detectBrowserLanguage: {
-      useCookie: true,
-      cookieKey: 'i18n_lang',
-      redirectOn: 'root',
-    },
-  },
-
-  pwa: {
-    /* PWA options */
   },
 })
