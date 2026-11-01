@@ -56,6 +56,13 @@ function table(rows) {
   for (const [mark, label, extra] of rows) console.log(` ${mark}  ${label.padEnd(w)}  ${extra}`)
 }
 
+// The radio reboots after the commit and the serial port closes under the stream adapter;
+// Node reports that as an unhandled AbortError. Harness-only: swallow it, verify decides.
+process.on('unhandledRejection', (e) => {
+  if (e?.code === 'ABORT_ERR' || e?.code === 'ERR_STREAM_PREMATURE_CLOSE') return
+  console.error('error: ' + redact(e?.message ?? e)); process.exit(1)
+})
+
 let conn
 try {
   conn = await connect(a.port)

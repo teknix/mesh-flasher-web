@@ -54,7 +54,8 @@ describe('buildPlan', () => {
     expect(m.password).toBe('hunter2-broker')
   })
   it('builds channels with psk bytes decoded from base64', () => {
-    expect(plan.channels).toHaveLength(2)
+    expect(plan.channels.filter(c => c.role !== Protobuf.Channel.Channel_Role.DISABLED)).toHaveLength(2)
+    expect(plan.channels).toHaveLength(8) // slots 2..7 cleared
     const c0 = plan.channels[0]!
     expect(c0.role).toBe(Protobuf.Channel.Channel_Role.PRIMARY)
     expect(c0.settings!.psk).toBeInstanceOf(Uint8Array)
@@ -84,7 +85,7 @@ describe('buildPlan', () => {
     expect(() => buildPlan({ ...config, lora: { ...config.lora, region: 'MARS' } }, names)).toThrow(SetupError)
   })
   it('lists steps in write order ending with the commit', () => {
-    expect(planSteps(plan).map(s => s.id)).toEqual(['lora', 'network', 'device', 'mqtt', 'owner', 'channel-0', 'channel-1', 'commit'])
+    expect(planSteps(plan).map(s => s.id)).toEqual(['lora', 'network', 'device', 'mqtt', 'owner', 'channel-0', 'channel-1', 'channel-2', 'channel-3', 'channel-4', 'channel-5', 'channel-6', 'channel-7', 'commit'])
   })
 })
 
@@ -210,8 +211,8 @@ describe('applyPlan', () => {
     const { device, calls } = fakeDevice()
     const seen: string[] = []
     const res = await applyPlan(device, plan, (id, s) => { if (s === 'done') seen.push(id) })
-    expect(calls).toEqual(['setConfig:lora', 'setConfig:network', 'setConfig:device', 'setModuleConfig:mqtt', 'setOwner', 'setChannel:0', 'setChannel:1', 'commit'])
-    expect(seen).toEqual(['lora', 'network', 'device', 'mqtt', 'owner', 'channel-0', 'channel-1', 'commit'])
+    expect(calls).toEqual(['setConfig:lora', 'setConfig:network', 'setConfig:device', 'setModuleConfig:mqtt', 'setOwner', 'setChannel:0', 'setChannel:1', 'setChannel:2', 'setChannel:3', 'setChannel:4', 'setChannel:5', 'setChannel:6', 'setChannel:7', 'commit'])
+    expect(seen).toEqual(['lora', 'network', 'device', 'mqtt', 'owner', 'channel-0', 'channel-1', 'channel-2', 'channel-3', 'channel-4', 'channel-5', 'channel-6', 'channel-7', 'commit'])
     expect(res.commit).toBe('acked')
   })
   it('stops at the failing step and names it', async () => {
@@ -246,5 +247,20 @@ describe('readDevice', () => {
     ;(device as unknown as { configure: () => Promise<number> }).configure = () => Promise.reject(new Error('x'))
     void events
     await expect(readDevice(device, 30)).rejects.toMatchObject({ name: 'SetupError', stepId: 'read' })
+  })
+})
+
+describe('unused channel slots', () => {
+  it('clears slots 1..7 the group does not define, skipping ones already disabled', () => {
+    const snap = emptySnapshot()
+    snap.channels[1] = create(Protobuf.Channel.ChannelSchema, { index: 1, role: Protobuf.Channel.Channel_Role.SECONDARY, settings: { name: 'Old' } })
+    snap.channels[2] = create(Protobuf.Channel.ChannelSchema, { index: 2, role: Protobuf.Channel.Channel_Role.DISABLED })
+    const plan = buildPlan(config, names, snap)
+    const disabled = plan.channels.filter(c => c.role === Protobuf.Channel.Channel_Role.DISABLED).map(c => c.index)
+    expect(disabled).toEqual([3, 4, 5, 6, 7]) // the fixture defines slots 0 and 1; slot 2 is already disabled
+    expect(plan.expect.find(e => e.id === 'channel.1.cleared')).toBeTruthy()
+    expect(plan.expect.find(e => e.id === 'channel.2.cleared')).toBeUndefined()
+    const noBase = buildPlan(config, names)
+    expect(noBase.channels.filter(c => c.role === Protobuf.Channel.Channel_Role.DISABLED).length).toBe(6)
   })
 })

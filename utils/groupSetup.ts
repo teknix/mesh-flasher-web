@@ -255,6 +255,18 @@ export function buildPlan(config: GroupConfig, names: Names, base?: Snapshot): P
       moduleSettings: { positionPrecision: ch.positionPrecision },
     },
   }))
+  // A radio that skips the flash keeps whatever channels it had (seen on hardware 2026-10-31:
+  // a stale SECONDARY in slot 1). Clear every slot 1..7 the group does not define, unless the
+  // radio already reports it as DISABLED.
+  const defined = new Set(config.channels.map(c => c.index))
+  const clearedSlots: number[] = []
+  for (let i = 1; i <= 7; i++) {
+    if (defined.has(i)) continue
+    const current = base?.channels[i]
+    if (current && current.role === Protobuf.Channel.Channel_Role.DISABLED) continue
+    clearedSlots.push(i)
+    channels.push(create(Protobuf.Channel.ChannelSchema, { index: i, role: Protobuf.Channel.Channel_Role.DISABLED, settings: {} }))
+  }
 
   const expect: Expectation[] = [
     { id: 'lora.region', label: 'Region', expected: region, read: s => s.lora?.region },
@@ -292,6 +304,10 @@ export function buildPlan(config: GroupConfig, names: Names, base?: Snapshot): P
         } },
     )
   }
+  for (const i of clearedSlots) {
+    expect.push({ id: `channel.${i}.cleared`, label: `Channel ${i} cleared`, expected: true,
+      read: s => { const c = s.channels[i]; return c === undefined || c.role === Protobuf.Channel.Channel_Role.DISABLED } })
+  }
   return { lora, network, device, mqtt, owner, channels, expect }
 }
 
@@ -309,7 +325,7 @@ export function planSteps(plan: Plan): PlanStep[] {
     { id: 'device', label: 'Radio role' },
     { id: 'mqtt', label: 'Internet link' },
     { id: 'owner', label: 'Your name' },
-    ...plan.channels.map(c => ({ id: `channel-${c.index}`, label: `Channel ${c.index}` })),
+    ...plan.channels.map(c => ({ id: `channel-${c.index}`, label: c.role === Protobuf.Channel.Channel_Role.DISABLED ? `Clear unused channel ${c.index}` : `Channel ${c.index}` })),
     { id: 'commit', label: 'Saving to the radio' },
   ]
 }
