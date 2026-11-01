@@ -6,6 +6,7 @@
 // owns its streams, can be closed cleanly, and never calls port.forget().
 import { Utils } from '@meshtastic/core'
 import type { Types } from '@meshtastic/core'
+import { settleWithin } from './timeout'
 
 export interface OpenTransport {
   transport: Types.Transport
@@ -89,9 +90,11 @@ export async function openTransport(port: SerialPort, baudRate = 115200): Promis
     try { await reader.cancel() } catch { /* already gone */ }
     await Promise.race([closed, sleep(1000)])
     try { reader.releaseLock() } catch { /* pending read settled above */ }
-    try { await writer.close() } catch { /* port may already be gone */ }
+    // writer.close() waits for queued writes, and a radio that stopped reading never drains
+    // them; port.close() can wait on the same. Bound both so a stuck radio can't freeze the page.
+    await settleWithin(writer.close(), 2000)
     try { writer.releaseLock() } catch { /* ignore */ }
-    try { await port.close() } catch { /* already closed */ }
+    await settleWithin(port.close(), 2000)
   }
 
   return { transport: { toDevice, fromDevice }, close, closed }

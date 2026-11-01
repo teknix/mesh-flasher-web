@@ -36,7 +36,7 @@
 
     <div v-else-if="state.busy" class="mt-5" role="status">
       <p class="text-base">
-        {{ state.installPhase === 'download' ? 'Getting the software...' : state.installPhase === 'restart' ? 'Restarting the radio...' : 'Installing...' }}
+        {{ phaseText }}
       </p>
       <div class="mt-2 h-4 rounded-full progress-track overflow-hidden">
         <div class="h-full rounded-full bg-gradient-to-r from-green-400 to-green-600 transition-all" :style="{ width: state.installPercent + '%' }" />
@@ -44,7 +44,10 @@
       <p class="mt-2 text-sm text-theme-muted">
         {{ state.installPercent }}%
       </p>
-      <p v-if="state.installPhase === 'restart'" class="mt-2 text-sm text-theme-muted">
+      <p v-if="state.installPhase === 'erase'" class="mt-2 text-sm text-theme-muted">
+        Wiping takes up to 2 minutes and the bar does not move. That is normal.
+      </p>
+      <p v-if="state.installPhase === 'reset'" class="mt-2 text-sm text-theme-muted">
         If the radio doesn't come back on its own, tap RST once.
       </p>
       <p class="mt-3 text-base font-semibold">
@@ -60,6 +63,9 @@
         {{ state.error ? 'Try again' : 'Install the software' }}
       </button>
       <p class="mt-3 text-sm text-theme-muted">
+        Chrome will ask you to pick the radio again. Pick it and press Connect.
+      </p>
+      <p class="mt-2 text-sm text-theme-muted">
         This erases the radio first. That is expected on a new radio.
       </p>
     </template>
@@ -72,5 +78,13 @@ import { useSetup } from '~/composables/useSetup'
 
 const { state, boards, board, installSoftware } = useSetup()
 const cfgBoards = computed(() => state.cfg?.firmware.boards ?? {})
+const phaseText = computed(() => ({
+  'download': 'Getting the software...',
+  'connect': 'Connecting to the radio...',
+  'erase': 'Wiping the radio...',
+  'write': 'Installing...',
+  'reset': 'Restarting the radio...',
+  '': 'Installing...',
+})[state.installPhase])
 const needsDfuScreen = computed(() => !!state.boardId && !!board.value?.requiresDfu && !state.dfuReady && !state.busy)
 </script>

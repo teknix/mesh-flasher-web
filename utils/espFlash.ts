@@ -2,7 +2,7 @@
 import { ESPLoader, Transport, type FlashOptions, type LoaderOptions } from 'esptool-js'
 import { matchesSha256 } from './sha256'
 import { openPortWithRetry } from './serialTransport'
-
+import { settleWithin, withStallLimit, withTimeout } from './timeout'
 
 export interface FlashEntry { name: string, address: string }
 export interface BoardFirmware {
@@ -71,15 +71,23 @@ function toBinaryString(bytes: Uint8Array): string {
   return s
 }
 
-const quiet = { clean() {}, writeLine() {}, write() {} }
+export type FlashPhase = 'connect' | 'erase' | 'write' | 'reset'
+
 const FLASH_BAUD = 115200 // upstream web-flasher default; faster rates unverified on this hardware
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
+
+// Time limits (ms). esptool-js tries 7 resets x 5 syncs with short read timeouts, so a radio that
+// answers connects in seconds. Its full-chip erase may take up to 120 s (CHIP_ERASE_TIMEOUT).
+const CONNECT_LIMIT = 45_000
+const STALL_LIMIT = 150_000
+const RESET_LIMIT = 5_000
 
 export interface FlashOptionsIn {
   port: SerialPort
   /** Verified images with their flash addresses (the board's `clean` list), written after a full erase. */
   images: Array<{ data: Uint8Array, address: number }>
   onProgress?: (percent: number) => void
+  onPhase?: (phase: FlashPhase) => void
 }
 
 export function parseAddress(a: string): number {
@@ -88,51 +96,81 @@ export function parseAddress(a: string): number {
   return n
 }
 
+/** Let go of the port even if esptool-js is stuck mid-read (its disconnect() can loop forever). */
+async function release(transport: Transport, port: SerialPort): Promise<void> {
+  await settleWithin(transport.disconnect(), 3000)
+  await settleWithin(port.close(), 2000)
+}
+
 /**
  * Erase and write every image at its address, hard-reset and close esptool's handle. Follow with
- * reacquirePort() before talking to the radio again.
+ * reacquirePort() before talking to the radio again. Every stage has a time limit, so a radio
+ * that stops answering ends in a FirmwareError instead of a frozen screen.
  */
-export async function flashImages({ port, images, onProgress }: FlashOptionsIn): Promise<void> {
+export async function flashImages({ port, images, onProgress, onPhase }: FlashOptionsIn): Promise<void> {
   const transport = new Transport(port, false)
+  // esptool's own log goes to the DevTools console (firmware only, no group secrets): the one
+  // place a helper can see where a stuck install stopped.
+  let onLine: ((line: string) => void) | undefined
+  const log = (line: string) => { console.debug('[esptool]', line); onLine?.(line) }
+  const terminal = { clean() {}, writeLine: log, write: log }
   let loader: ESPLoader
+  onPhase?.('connect')
   try {
-    loader = new ESPLoader({ transport, baudrate: FLASH_BAUD, romBaudrate: 115200, terminal: quiet } as LoaderOptions)
-    await loader.main()
+    loader = new ESPLoader({ transport, baudrate: FLASH_BAUD, romBaudrate: 115200, terminal } as LoaderOptions)
+    await withTimeout(loader.main(), CONNECT_LIMIT, 'installer connect timed out')
   }
   catch (e) {
-    try { await transport.disconnect() } catch { /* ignore */ }
+    console.warn('[esptool] connect failed:', e)
+    await release(transport, port)
     throw new FirmwareError('Could not talk to the radio\'s installer. Put the radio in install mode again (hold PRG, tap RST, let go of PRG), then try again.', 'connect')
   }
   try {
-    await loader.writeFlash({
-      fileArray: images.map(i => ({ data: toBinaryString(i.data), address: i.address })),
-      flashSize: 'keep',
-      flashMode: 'keep',
-      flashFreq: 'keep',
-      eraseAll: true,
-      compress: true,
-      reportProgress: (i, written, total) => onProgress?.(total ? Math.round(((i + written / total) / images.length) * 100) : 0),
-    } as FlashOptions)
+    await withStallLimit((touch) => {
+      onLine = (line) => {
+        touch()
+        if (/erasing flash/i.test(line)) onPhase?.('erase')
+      }
+      return loader.writeFlash({
+        fileArray: images.map(i => ({ data: toBinaryString(i.data), address: i.address })),
+        flashSize: 'keep',
+        flashMode: 'keep',
+        flashFreq: 'keep',
+        eraseAll: true,
+        compress: true,
+        reportProgress: (i, written, total) => {
+          touch()
+          onPhase?.('write')
+          onProgress?.(total ? Math.round(((i + written / total) / images.length) * 100) : 0)
+        },
+      } as FlashOptions)
+    }, STALL_LIMIT, 'flash write stalled')
   }
-  catch {
-    try { await transport.disconnect() } catch { /* ignore */ }
-    throw new FirmwareError('Installing the software stopped partway. The radio is safe to retry: keep it plugged in and try again.', 'write')
+  catch (e) {
+    console.warn('[esptool] write failed:', e)
+    await release(transport, port)
+    throw new FirmwareError('Installing the software stopped partway. The radio is safe to retry: put it in install mode again (hold PRG, tap RST, let go of PRG) and press Try again.', 'write')
   }
+  finally { onLine = undefined }
+  onPhase?.('reset')
   try {
     try {
-      await loader.after('hard_reset')
+      await withTimeout(loader.after('hard_reset'), RESET_LIMIT)
     }
     catch {
       // Fallback: pulse RTS ourselves (what upstream's flasher does).
-      await transport.setRTS(true)
-      await sleep(100)
-      await transport.setRTS(false)
+      await withTimeout((async () => {
+        await transport.setRTS(true)
+        await sleep(100)
+        await transport.setRTS(false)
+      })(), RESET_LIMIT)
     }
   }
   catch {
+    await release(transport, port)
     throw new FirmwareError('The software is installed but the radio did not restart by itself. Unplug it, plug it back in, then continue.', 'reset')
   }
-  try { await transport.disconnect() } catch { /* port may have re-enumerated */ }
+  await release(transport, port)
 }
 
 /**

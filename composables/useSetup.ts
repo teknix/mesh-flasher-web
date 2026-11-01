@@ -6,7 +6,7 @@ import { detectGate, type GateResult } from '~/utils/browserGate'
 import { resolveBoard, suggestShortName, checkNames } from '~/utils/board'
 import { openAndRead, openSession } from '~/utils/meshSession'
 import { buildPlan, applyPlan, compareSnapshot, planSteps, readDevice, nodeIdFromNum, SetupError, type Plan, type PlanStep, type Snapshot, type StepState, type FieldResult } from '~/utils/groupSetup'
-import { fetchVerified, flashImages, parseAddress, reacquirePort, FirmwareError } from '~/utils/espFlash'
+import { fetchVerified, flashImages, parseAddress, reacquirePort, FirmwareError, type FlashPhase } from '~/utils/espFlash'
 
 export type Step = 'loading' | 'gate' | 'signin' | 'plug' | 'check' | 'refused' | 'install' | 'name' | 'setup' | 'verify' | 'done'
 
@@ -38,7 +38,7 @@ const state = reactive({
   refusedLabel: '',
   needsInstall: false,
   dfuReady: false,
-  installPhase: '' as '' | 'download' | 'write' | 'restart',
+  installPhase: '' as '' | 'download' | FlashPhase,
   installPercent: 0,
   busy: false,
   error: '',
@@ -187,6 +187,17 @@ export function useSetup() {
     if (!cfg || !state.port) return go('plug')
     const bd = cfg.firmware.boards[state.boardId]
     if (!bd) { state.error = 'Pick which radio you have first.'; return }
+    // Pick the port again, straight from this click: putting the radio in install mode (PRG +
+    // RST) resets its USB, so on native-USB boards the port picked earlier is a dead handle.
+    // Upstream's flasher asks again for the same reason.
+    state.error = ''
+    try {
+      state.port = await navigator.serial.requestPort()
+    }
+    catch (e) {
+      if ((e as { name?: string })?.name === 'NotFoundError') return // closed the picker
+      return setError(e, 'Could not open the radio picker.')
+    }
     state.busy = true
     state.error = ''
     state.installPercent = 0
@@ -199,9 +210,13 @@ export function useSetup() {
         images.push({ data, address: parseAddress(e.address) })
       }
       // Every file is downloaded and hash-checked before anything is written.
-      state.installPhase = 'write'
-      await flashImages({ port: state.port, images, onProgress: p => (state.installPercent = 5 + Math.round(p * 0.95)) })
-      state.installPhase = 'restart'
+      await flashImages({
+        port: state.port,
+        images,
+        onPhase: p => (state.installPhase = p),
+        onProgress: p => (state.installPercent = 5 + Math.round(p * 0.95)),
+      })
+      state.installPhase = 'reset'
       const port = await reacquirePort(state.port)
       if (!port) {
         state.error = 'The software is installed. Tap the RST button once, or unplug the radio and plug it back in, then press Pick your radio.'
