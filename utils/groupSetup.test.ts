@@ -258,7 +258,7 @@ describe('unused channel slots', () => {
     const plan = buildPlan(config, names, snap)
     const disabled = plan.channels.filter(c => c.role === Protobuf.Channel.Channel_Role.DISABLED).map(c => c.index)
     expect(disabled).toEqual([3, 4, 5, 6, 7]) // the fixture defines slots 0 and 1; slot 2 is already disabled
-    expect(plan.expect.find(e => e.id === 'channel.1.cleared')).toBeTruthy()
+    expect(plan.expect.find(e => e.id === 'channel.3.cleared')).toBeTruthy()
     expect(plan.expect.find(e => e.id === 'channel.2.cleared')).toBeUndefined()
     const noBase = buildPlan(config, names)
     expect(noBase.channels.filter(c => c.role === Protobuf.Channel.Channel_Role.DISABLED).length).toBe(6)
