@@ -41,7 +41,9 @@ export default defineNuxtConfig({
   css: ['~/assets/css/main.css'],
 
   runtimeConfig: {
-    public: { commit },
+    // `preview`: only in a local build made with NUXT_PUBLIC_PREVIEW=1 — enables `?preview=<screen>`
+    // for screenshots of the wait screens without a radio. Never set for a production build.
+    public: { commit, preview: process.env.NUXT_PUBLIC_PREVIEW === '1' },
   },
 
   routeRules: {

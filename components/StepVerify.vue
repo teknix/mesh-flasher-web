@@ -3,9 +3,18 @@
     <h1 class="text-2xl font-semibold">
       Checking it took
     </h1>
-    <p v-if="state.busy" class="mt-3 text-base" role="status">
-      Reading your radio back. This can take up to a minute.
-    </p>
+    <div v-if="state.busy" class="mt-3">
+      <WaitPanel
+        label="Reading your radio back and comparing every setting."
+        :countdown="state.wait"
+        note="Usually under 30 seconds. The radio has just restarted, so the first tries may get no answer — that's expected."
+        next="done, with a list of what was checked."
+      >
+        <template #expired>
+          The radio hasn't answered yet. You'll get a Check again button in a moment; if the screen is dark, tap RST once first.
+        </template>
+      </WaitPanel>
+    </div>
     <p v-if="!state.busy && state.error" class="mt-3 text-error" role="alert">
       {{ state.error }}
     </p>

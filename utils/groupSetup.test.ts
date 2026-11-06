@@ -248,6 +248,26 @@ describe('readDevice', () => {
     void events
     await expect(readDevice(device, 30)).rejects.toMatchObject({ name: 'SetupError', stepId: 'read' })
   })
+  it('stopAt metadata resolves as soon as the radio has identified itself', async () => {
+    const { device } = fakeDevice()
+    const snap = await readDevice(device, 1000, { stopAt: 'metadata' })
+    expect(snap).toMatchObject({ configured: false, pioEnv: 'heltec-v4', hwModel: 110, firmwareVersion: '2.7.26.54e0d8d', myNodeNum: 0xf66f1e38 })
+    expect(snap.lora).toBeUndefined() // stopped before the config stream
+  })
+  it('a timed-out read still hands back what the radio did say', async () => {
+    const { device, events } = fakeDevice()
+    ;(device as unknown as { configure: () => Promise<number> }).configure = () => {
+      queueMicrotask(() => {
+        events.onMyNodeInfo.emit(create(Protobuf.Mesh.MyNodeInfoSchema, { myNodeNum: 7, pioEnv: 'heltec-v4' }))
+        events.onDeviceMetadataPacket.emit({ data: create(Protobuf.Mesh.DeviceMetadataSchema, { firmwareVersion: '2.6.11.aaa', hwModel: 110 }) })
+        // no DeviceConfigured: the node list is still streaming
+      })
+      return Promise.reject(new Error('never acked'))
+    }
+    const err = await readDevice(device, 30).catch(e => e as SetupError)
+    expect(err).toBeInstanceOf(SetupError)
+    expect((err as SetupError).cause).toMatchObject({ firmwareVersion: '2.6.11.aaa', hwModel: 110, configured: false })
+  })
 })
 
 describe('unused channel slots', () => {

@@ -3,12 +3,16 @@
 import { reactive, computed } from 'vue'
 import * as api from '~/utils/api'
 import { detectGate, type GateResult } from '~/utils/browserGate'
-import { resolveBoard, suggestShortName, checkNames } from '~/utils/board'
+import { suggestShortName, checkNames } from '~/utils/board'
 import { openAndRead, openSession } from '~/utils/meshSession'
 import { buildPlan, applyPlan, compareSnapshot, planSteps, readDevice, nodeIdFromNum, SetupError, type Plan, type PlanStep, type Snapshot, type StepState, type FieldResult } from '~/utils/groupSetup'
-import { fetchVerified, flashImages, parseAddress, reacquirePort, FirmwareError, type FlashPhase } from '~/utils/espFlash'
+import { fetchVerified, flashImages, parseAddress, FirmwareError, type FlashPhase } from '~/utils/espFlash'
+import { routeAfterRead, type CheckRoute } from '~/utils/checkRoute'
+import { startCountdown, type Countdown } from '~/utils/countdown'
+import { RADIO_USB_FILTERS } from '~/utils/usb'
+import { openPortWithRetry } from '~/utils/serialTransport'
 
-export type Step = 'loading' | 'gate' | 'signin' | 'plug' | 'check' | 'refused' | 'install' | 'name' | 'setup' | 'verify' | 'done'
+export type Step = 'loading' | 'gate' | 'signin' | 'plug' | 'check' | 'noanswer' | 'refused' | 'install' | 'name' | 'setup' | 'verify' | 'done'
 
 export const STEP_NAMES: Record<Step, string> = {
   loading: 'Loading',
@@ -16,6 +20,7 @@ export const STEP_NAMES: Record<Step, string> = {
   signin: 'Sign in',
   plug: 'Plug in the radio',
   check: 'Checking your radio',
+  noanswer: 'The radio did not answer',
   refused: 'Radio not supported',
   install: 'Installing the radio\'s software',
   name: 'Your name',
@@ -23,6 +28,30 @@ export const STEP_NAMES: Record<Step, string> = {
   verify: 'Checking it took',
   done: 'Done',
 }
+
+// How long each wait may take. Every number here is shown to the member as a countdown, so
+// each one is a promise: generous enough to be true, short enough to be useful.
+export const WAIT = {
+  /** The radio identifies itself within a second or two; 25 s covers a radio busy with a big node list. */
+  check: 25,
+  /** esptool connect limit (espFlash CONNECT_LIMIT) — the radio must be in install mode. */
+  connect: 45,
+  /** Full-chip erase on a 16 MB board (esptool CHIP_ERASE_TIMEOUT). The bar does not move. */
+  erase: 120,
+  /** Hard reset after the write. */
+  reset: 5,
+  /**
+   * First boot after a clean install: the firmware formats its file system before it answers.
+   * ⚠️ Placeholder until measured on a Heltec V4 (vault: mesh-flasher-member-flow-fixes-2026-11-05).
+   */
+  firstBoot: 90,
+  /** Save + reboot after setup, then the port comes back. */
+  save: 10,
+  /** The whole verify window: VERIFY_ATTEMPTS × (pause + read). */
+  verify: 6 * (3 + 20) + 2,
+} as const
+
+const VERIFY_ATTEMPTS = 6
 
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
 
@@ -37,11 +66,23 @@ const state = reactive({
   boardId: '' as string,
   refusedLabel: '',
   needsInstall: false,
+  /** The check ran at least once and decided whether an install is needed. */
+  checked: false,
+  /** The silent-radio screen: true when we got there right after installing the software. */
+  afterInstall: false,
   dfuReady: false,
-  installPhase: '' as '' | 'download' | FlashPhase,
+  installPhase: '' as '' | 'download' | FlashPhase | 'firstboot',
   installPercent: 0,
+  /** Date.now() when the current install phase began (for the write-time estimate). */
+  phaseStartedAt: 0,
+  /** The countdown for the wait the member is looking at, or null when there is none. */
+  wait: null as Countdown | null,
+  /** Which part of setup/verify is waiting: saving = commit + reboot; verify = read-back window. */
+  waitPhase: '' as '' | 'saving' | 'verify',
   busy: false,
   error: '',
+  /** Soft hint under the Pick button (e.g. the picker showed no radio). Not an error. */
+  pickerNote: '',
   signinNote: '',
   longName: '',
   shortName: '',
@@ -60,11 +101,67 @@ function setError(e: unknown, fallback = 'Something went wrong.') {
   state.error = e instanceof Error && e.message ? e.message : fallback
 }
 
+function setPhase(p: typeof state.installPhase) {
+  state.installPhase = p
+  state.phaseStartedAt = Date.now()
+  state.wait = p === 'connect'
+    ? startCountdown(WAIT.connect)
+    : p === 'erase'
+      ? startCountdown(WAIT.erase)
+      : p === 'reset'
+        ? startCountdown(WAIT.reset)
+        : p === 'firstboot'
+          ? startCountdown(WAIT.firstBoot)
+          : null
+}
+
+/** Ask Chrome for a radio. Returns null when the member closed the picker (and leaves a hint). */
+async function askForPort(): Promise<SerialPort | null> {
+  state.pickerNote = ''
+  try {
+    // Must run straight from the click (user gesture). The vendor filter keeps Bluetooth and
+    // virtual ports out of the list — the usual wrong pick on a Mac.
+    return await navigator.serial.requestPort({ filters: RADIO_USB_FILTERS })
+  }
+  catch (e) {
+    if ((e as { name?: string })?.name === 'NotFoundError') {
+      state.pickerNote = 'No radio in the list? Make sure the cable is a data cable — charging-only cables look the same — and try another USB port.'
+      return null
+    }
+    setError(e, 'Could not open the radio picker.')
+    return null
+  }
+}
+
+/** Try the known port, then every granted port; return the first that opens (and close it again). */
+async function findOpenablePort(prev: SerialPort | null): Promise<SerialPort | null> {
+  const candidates: SerialPort[] = []
+  if (prev) candidates.push(prev)
+  try {
+    for (const p of await navigator.serial.getPorts()) if (!candidates.includes(p)) candidates.push(p)
+  }
+  catch { /* no permission API: fall back to prev only */ }
+  for (const p of candidates) {
+    try {
+      await openPortWithRetry(p, 115200, 1, 0)
+      try {
+        await p.close()
+      }
+      catch { /* ignore */ }
+      return p
+    }
+    catch { /* next */ }
+  }
+  return null
+}
+
 export function useSetup() {
   const boards = computed(() => Object.keys(state.cfg?.firmware.boards ?? {}))
   const board = computed(() => state.cfg?.firmware.boards[state.boardId])
   const helpContact = computed(() => state.site?.helpContact || 'the person who sent you the radio')
   const groupName = computed(() => state.site?.group.name || 'Your group')
+  /** For the step strip: Install is crossed out once the check said the radio is already current. */
+  const installSkipped = computed(() => state.checked && !state.needsInstall)
 
   function go(step: Step) {
     state.step = step
@@ -84,6 +181,13 @@ export function useSetup() {
         ? 'Sign-in was cancelled. Press the button to try again.'
         : `Sign-in did not work${q.get('why') ? `: ${q.get('why')}` : ''}. Try again.`
       history.replaceState(null, '', location.pathname)
+    }
+    const preview = q.get('preview')
+    if (preview && useRuntimeConfig().public.preview) {
+      // Screenshot mode for a local build only (see nuxt.config.ts): fake state, no radio.
+      const { applyPreview } = await import('~/utils/preview')
+      applyPreview(state, preview)
+      return
     }
     try {
       state.site = await api.getSite()
@@ -135,15 +239,33 @@ export function useSetup() {
 
   async function pickRadio() {
     state.error = ''
-    try {
-      // Must run straight from the click (user gesture). No port filter: boards differ.
-      state.port = await navigator.serial.requestPort()
-    }
-    catch (e) {
-      if ((e as { name?: string })?.name === 'NotFoundError') return // closed the picker
-      return setError(e, 'Could not open the radio picker.')
-    }
+    const port = await askForPort()
+    if (!port) return
+    state.port = port
+    state.afterInstall = false
     await checkRadio()
+  }
+
+  /** Act on what the check found. Only 'install' and 'silent' can lead to the install screen. */
+  function applyRoute(route: CheckRoute) {
+    state.checked = route.kind !== 'silent'
+    switch (route.kind) {
+      case 'silent':
+        state.needsInstall = false
+        return go('noanswer')
+      case 'refused':
+        state.refusedLabel = route.label
+        return go('refused')
+      case 'install':
+        state.boardId = route.boardId
+        state.needsInstall = true
+        state.dfuReady = false
+        return go('install')
+      case 'name':
+        state.boardId = route.boardId
+        state.needsInstall = false
+        return go('name')
+    }
   }
 
   async function checkRadio() {
@@ -151,33 +273,32 @@ export function useSetup() {
     go('check')
     state.snapshot = null
     state.boardId = ''
+    state.wait = startCountdown(WAIT.check)
     try {
-      const { session, snapshot } = await openAndRead(state.port, 10000)
+      const { session, snapshot } = await openAndRead(state.port, WAIT.check * 1000, { stopAt: 'metadata' })
       await session.close()
       state.snapshot = snapshot
-      const res = resolveBoard({ pioEnv: snapshot.pioEnv, hwModel: snapshot.hwModel }, state.cfg.firmware.boards)
-      if (!res.supported) {
-        state.refusedLabel = res.label
-        return go('refused')
-      }
-      state.boardId = res.boardId!
-      const pinned = (state.cfg.firmware.version || '').replace(/^v/, '')
-      const have = (snapshot.firmwareVersion || '').replace(/^v/, '')
-      state.needsInstall = !have || have !== pinned
-      state.dfuReady = false
-      go(state.needsInstall ? 'install' : 'name')
+      applyRoute(routeAfterRead(snapshot, state.cfg.firmware.boards, state.cfg.firmware.version))
     }
     catch (e) {
       if (e instanceof SetupError && e.stepId === 'read') {
-        // No answer: blank board or in installer mode. Go install; the board is chosen there.
-        state.needsInstall = true
-        state.dfuReady = false
-        if (boards.value.length === 1) state.boardId = boards.value[0]!
-        return go('install')
+        // Timed out — but route on whatever the radio did say. Silent only if it said nothing.
+        const partial = e.cause as Snapshot | undefined
+        state.snapshot = partial ?? null
+        return applyRoute(routeAfterRead(partial, state.cfg.firmware.boards, state.cfg.firmware.version))
       }
       go('plug')
       setError(e, 'Could not open the radio. Unplug it, plug it in again, and try again.')
     }
+    finally { state.wait = null }
+  }
+
+  /** From the silent-radio screen: the member says it is a brand-new radio with no software. */
+  function installAnyway() {
+    state.needsInstall = true
+    state.dfuReady = false
+    if (boards.value.length === 1) state.boardId = boards.value[0]!
+    go('install')
   }
 
   // --- install ---------------------------------------------------------------------------
@@ -191,18 +312,14 @@ export function useSetup() {
     // RST) resets its USB, so on native-USB boards the port picked earlier is a dead handle.
     // Upstream's flasher asks again for the same reason.
     state.error = ''
-    try {
-      state.port = await navigator.serial.requestPort()
-    }
-    catch (e) {
-      if ((e as { name?: string })?.name === 'NotFoundError') return // closed the picker
-      return setError(e, 'Could not open the radio picker.')
-    }
+    const port = await askForPort()
+    if (!port) return
+    state.port = port
     state.busy = true
     state.error = ''
     state.installPercent = 0
     try {
-      state.installPhase = 'download'
+      setPhase('download')
       const images: Array<{ data: Uint8Array, address: number }> = []
       for (let i = 0; i < bd.clean.length; i++) {
         const e = bd.clean[i]!
@@ -213,18 +330,21 @@ export function useSetup() {
       await flashImages({
         port: state.port,
         images,
-        onPhase: p => (state.installPhase = p),
+        onPhase: p => setPhase(p),
         onProgress: p => (state.installPercent = 5 + Math.round(p * 0.95)),
       })
-      state.installPhase = 'reset'
-      const port = await reacquirePort(state.port)
-      if (!port) {
-        state.error = 'The software is installed. Tap the RST button once, or unplug the radio and plug it back in, then press Pick your radio.'
-        state.needsInstall = false
-        return go('plug')
-      }
-      state.port = port
       state.needsInstall = false
+      // First boot: the radio formats its file system before it talks. Wait for it here, with a
+      // countdown, instead of sending the member back to "Pick your radio" to find out.
+      setPhase('firstboot')
+      const found = await waitForFirstBoot(state.port, WAIT.firstBoot * 1000)
+      if (!found) {
+        state.afterInstall = true
+        return go('noanswer')
+      }
+      state.port = found.port
+      state.snapshot = found.snapshot
+      state.checked = true
       go('name')
     }
     catch (e) {
@@ -236,7 +356,31 @@ export function useSetup() {
     finally {
       state.busy = false
       state.installPhase = ''
+      state.wait = null
     }
+  }
+
+  /**
+   * Poll until the radio answers a handshake after a fresh install, or the deadline passes.
+   * Tries the same port object first, then any granted port (native USB re-enumerates).
+   */
+  async function waitForFirstBoot(prev: SerialPort, limitMs: number): Promise<{ port: SerialPort, snapshot: Snapshot } | null> {
+    const deadline = Date.now() + limitMs
+    await sleep(2000)
+    while (Date.now() < deadline) {
+      const port = await findOpenablePort(prev)
+      if (port) {
+        try {
+          const left = Math.max(3000, Math.min(10000, deadline - Date.now()))
+          const { session, snapshot } = await openAndRead(port, left, { stopAt: 'metadata' })
+          await session.close()
+          return { port, snapshot }
+        }
+        catch { /* not talking yet */ }
+      }
+      await sleep(3000)
+    }
+    return null
   }
 
   // --- name ------------------------------------------------------------------------------
@@ -262,6 +406,8 @@ export function useSetup() {
     state.stepStates = {}
     state.plan = null
     state.steps = []
+    state.waitPhase = ''
+    state.wait = null
     let session: Awaited<ReturnType<typeof openSession>> | null = null
     try {
       const opened = await openAndRead(state.port, 15000)
@@ -271,6 +417,8 @@ export function useSetup() {
       state.steps = planSteps(plan)
       await applyPlan(session.device, plan, (id, s) => { state.stepStates = { ...state.stepStates, [id]: s } })
       // The radio reboots now; give it a moment to drop the connection, then let go.
+      state.waitPhase = 'saving'
+      state.wait = startCountdown(WAIT.save)
       await Promise.race([session.closed, sleep(6000)])
       await session.close()
       session = null
@@ -280,6 +428,8 @@ export function useSetup() {
     catch (e) {
       if (session) { try { await session.close() } catch { /* ignore */ } }
       state.busy = false
+      state.wait = null
+      state.waitPhase = ''
       const where = e instanceof SetupError && e.stepId ? ` (stopped at: ${state.steps.find(s => s.id === e.stepId)?.label ?? e.stepId})` : ''
       state.error = (e instanceof Error ? e.message : 'Setting up the radio did not work.') + where
     }
@@ -290,11 +440,13 @@ export function useSetup() {
     go('verify')
     state.busy = true
     state.fields = []
+    state.waitPhase = 'verify'
+    state.wait = startCountdown(WAIT.verify)
     try {
       let snap: Snapshot | null = null
       let lastErr: unknown
-      for (let attempt = 0; attempt < 6 && !snap; attempt++) {
-        await sleep(attempt === 0 ? 3000 : 3000)
+      for (let attempt = 0; attempt < VERIFY_ATTEMPTS && !snap; attempt++) {
+        await sleep(3000)
         try {
           const session = await openSession(state.port)
           try { snap = await readDevice(session.device, 20000) }
@@ -304,11 +456,8 @@ export function useSetup() {
           lastErr = e
           // The radio may have come back as a new port object.
           if (e instanceof SetupError) continue
-          try {
-            const granted = await navigator.serial.getPorts()
-            if (granted.length === 1) state.port = granted[0]!
-          }
-          catch { /* ignore */ }
+          const p = await findOpenablePort(state.port)
+          if (p) state.port = p
         }
       }
       if (!snap) throw lastErr ?? new Error('no answer')
@@ -321,7 +470,11 @@ export function useSetup() {
     catch {
       state.error = 'Could not read the radio back. Unplug it, plug it in again, and press Check again.'
     }
-    finally { state.busy = false }
+    finally {
+      state.busy = false
+      state.wait = null
+      state.waitPhase = ''
+    }
   }
 
   const failedFields = computed(() => state.fields.filter(f => f.status === 'mismatch' || f.status === 'missing'))
@@ -348,7 +501,7 @@ export function useSetup() {
   function stuckText(): string {
     const bits = [
       `Radio setup problem (${groupName.value})`,
-      `Step: ${STEP_NAMES[state.step]}`,
+      `Step: ${STEP_NAMES[state.step]}${state.installPhase ? ` / ${state.installPhase}` : ''}${state.waitPhase ? ` / ${state.waitPhase}` : ''}`,
       `What it said: ${state.error || (failedFields.value.length ? 'Radio did not accept: ' + failedFields.value.map(f => f.label).join(', ') : 'nothing yet')}`,
       state.snapshot?.firmwareVersion ? `Radio software: ${state.snapshot.firmwareVersion}` : '',
       state.boardId ? `Radio: ${state.boardId}` : '',
@@ -358,8 +511,8 @@ export function useSetup() {
   }
 
   return {
-    state, boards, board, helpContact, groupName, nameCheck, failedFields,
-    go, init, signInZulip, signInMatrix, pickRadio, checkRadio, installSoftware,
+    state, boards, board, helpContact, groupName, nameCheck, failedFields, installSkipped,
+    go, init, signInZulip, signInMatrix, pickRadio, checkRadio, installAnyway, installSoftware,
     setLongName, setShortName, setupRadio, verifyRadio, checkMesh, stuckText, afterSignIn,
   }
 }

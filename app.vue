@@ -4,6 +4,7 @@
       <p class="text-sm text-theme-muted">
         {{ groupName }} radio setup
       </p>
+      <StepStrip v-if="showStrip" :step="state.step" :install-skipped="installSkipped" />
     </header>
 
     <main class="flex-1 w-full max-w-xl mx-auto px-4 pb-6">
@@ -14,6 +15,7 @@
       <StepSignIn v-else-if="state.step === 'signin'" />
       <StepPlug v-else-if="state.step === 'plug'" />
       <StepCheck v-else-if="state.step === 'check'" />
+      <StepNoAnswer v-else-if="state.step === 'noanswer'" />
       <StepRefused v-else-if="state.step === 'refused'" />
       <StepInstall v-else-if="state.step === 'install'" />
       <StepName v-else-if="state.step === 'name'" />
@@ -41,9 +43,10 @@
 import { ref, computed, onMounted } from 'vue'
 import { useSetup } from '~/composables/useSetup'
 
-const { state, groupName, helpContact, init, stuckText } = useSetup()
+const { state, groupName, helpContact, installSkipped, init, stuckText } = useSetup()
 const commit = useRuntimeConfig().public.commit as string
 const copied = ref(false)
+const showStrip = computed(() => !['loading', 'gate', 'signin'].includes(state.step))
 
 useHead({ title: computed(() => `${groupName.value} radio setup`) })
 

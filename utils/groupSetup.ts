@@ -82,19 +82,32 @@ const DEVICE_CONFIGURED = Types.DeviceStatusEnum.DeviceConfigured
  * normally; it rejects after 60 s). On timeout rejects with a SetupError whose `cause` is the
  * partial Snapshot.
  */
-export function readDevice(device: MeshDevice, timeoutMs = 10000): Promise<Snapshot> {
+export interface ReadOptions {
+  /**
+   * 'configured' (default): wait for the whole handshake (config, channels, node list).
+   * 'metadata': resolve as soon as the radio has identified itself (node info + firmware
+   * metadata) — enough to route the member, and quick even on a radio with a big node list.
+   */
+  stopAt?: 'configured' | 'metadata'
+}
+
+export function readDevice(device: MeshDevice, timeoutMs = 10000, opts: ReadOptions = {}): Promise<Snapshot> {
   const snap = emptySnapshot()
   const nodes = new Map<number, { longName: string, shortName: string }>()
   const unsubs: Array<() => void> = []
   const ev = device.events
+  // Set once the promise exists; the early-stop check below is a no-op before that.
+  let identified: () => void = () => {}
 
   unsubs.push(ev.onMyNodeInfo.subscribe((m) => {
     snap.myNodeNum = m.myNodeNum
     if (m.pioEnv) snap.pioEnv = m.pioEnv
+    identified()
   }))
   unsubs.push(ev.onDeviceMetadataPacket.subscribe((p) => {
     snap.firmwareVersion = p.data.firmwareVersion
     snap.hwModel = p.data.hwModel as number
+    identified()
   }))
   unsubs.push(ev.onConfigPacket.subscribe((c) => {
     const v = c.payloadVariant
@@ -126,14 +139,21 @@ export function readDevice(device: MeshDevice, timeoutMs = 10000): Promise<Snaps
       finish()
       reject(new SetupError('The radio did not answer in time.', 'read', snap))
     }, timeoutMs)
-    unsubs.push(ev.onDeviceStatus.subscribe((s) => {
-      if (s === DEVICE_CONFIGURED && !done) {
-        done = true
-        clearTimeout(timer)
-        snap.configured = true
-        finish()
-        resolve(snap)
+    const settle = (configured: boolean) => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      snap.configured = configured
+      finish()
+      resolve(snap)
+    }
+    if (opts.stopAt === 'metadata') {
+      identified = () => {
+        if (snap.myNodeNum !== undefined && snap.firmwareVersion !== undefined) settle(false)
       }
+    }
+    unsubs.push(ev.onDeviceStatus.subscribe((s) => {
+      if (s === DEVICE_CONFIGURED) settle(true)
     }))
     // configure() resolves only if wantConfigId is acked, which it is not; ignore its outcome.
     device.configure().catch(() => { /* expected: queue timeout */ })

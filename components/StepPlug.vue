@@ -5,15 +5,21 @@
     </h1>
     <ol class="mt-4 space-y-3 text-base list-decimal ps-5">
       <li>Screw the antenna on first.</li>
-      <li>Use the cable from the envelope. Some cables only charge and won't work.</li>
-      <li>Plug the radio into this computer, then press the button below.</li>
+      <li>Use the cable from the envelope. <strong>Charging-only cables look identical</strong> and won't work — if the radio lights up but this page can't see it, that's the cable.</li>
+      <li>Plug the radio straight into this computer (not a hub), then press the button below.</li>
     </ol>
+    <p class="mt-3 text-sm text-theme-muted">
+      What happens next: a small window lists your radio — pick it and press Connect. Then this page checks the radio for a few seconds, and installs its software only if it needs it (about 3 minutes). The whole thing is usually under 5 minutes.
+    </p>
     <p v-if="state.error" class="mt-4 text-error" role="alert">
       {{ state.error }}
     </p>
     <button type="button" class="btn-primary w-full mt-5 min-h-[52px] text-base" @click="pickRadio">
       Pick your radio
     </button>
+    <p v-if="state.pickerNote" class="mt-3 text-sm text-theme-muted" role="status">
+      {{ state.pickerNote }}
+    </p>
     <details class="mt-4 text-sm text-theme-muted">
       <summary class="cursor-pointer min-h-[44px] flex items-center">
         My radio isn't in the list

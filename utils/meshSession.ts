@@ -1,7 +1,7 @@
 // Browser-side glue: one MeshDevice over one SerialPort, closed cleanly after use.
 import { MeshDevice } from '@meshtastic/core'
 import { openTransport } from './serialTransport'
-import { readDevice, type Snapshot } from './groupSetup'
+import { readDevice, type Snapshot, type ReadOptions } from './groupSetup'
 
 export interface Session {
   device: MeshDevice
@@ -17,10 +17,10 @@ export async function openSession(port: SerialPort): Promise<Session> {
 }
 
 /** Open, run the handshake, and return the open session plus what the radio reported. */
-export async function openAndRead(port: SerialPort, timeoutMs = 10000): Promise<{ session: Session, snapshot: Snapshot }> {
+export async function openAndRead(port: SerialPort, timeoutMs = 10000, opts: ReadOptions = {}): Promise<{ session: Session, snapshot: Snapshot }> {
   const session = await openSession(port)
   try {
-    const snapshot = await readDevice(session.device, timeoutMs)
+    const snapshot = await readDevice(session.device, timeoutMs, opts)
     return { session, snapshot }
   }
   catch (e) {

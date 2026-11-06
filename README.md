@@ -19,7 +19,13 @@ License: GPL-3.0. The footer of every page shows the commit this build was made 
 | install firmware (esptool-js, SHA-256 checked first) | `utils/espFlash.ts`, `utils/sha256.ts` |
 | build / write / verify group config (transport-agnostic) | `utils/groupSetup.ts` |
 | board and name helpers | `utils/board.ts` |
+| where the check sends the member (never "install" without evidence) | `utils/checkRoute.ts` |
+| countdown arithmetic for the wait screens | `utils/countdown.ts` |
+| USB vendor filter for the port picker | `utils/usb.ts` |
 | screens | `components/Step*.vue`, `app.vue` |
+| wait screen body (progress bar, countdown, "next") and step strip | `components/WaitPanel.vue`, `components/StepStrip.vue` |
+
+Waits are shown with a countdown only when their length is known (a countdown is a promise); progress bars only where there is real progress. The numbers are in `WAIT` in `composables/useSetup.ts`.
 
 The backend is expected to serve `GET /api/site`, `/api/me`, `/api/config`, `POST /api/login/zulip`, `GET /api/login/matrix`, `POST /api/check-uplink` and `/firmware/<version>/<file>`.
 
@@ -33,6 +39,10 @@ pnpm generate            # static site in .output/public
 ```
 
 The footer commit comes from `NUXT_PUBLIC_COMMIT`, falling back to `git rev-parse --short HEAD`. `public/version.json` is written at build time.
+
+### Screenshots without a radio
+
+`NUXT_PUBLIC_PREVIEW=1 pnpm generate` makes a local build where `/?preview=<screen>` shows any wait screen with fake state (`utils/preview.ts` lists the names: `install-erase`, `install-firstboot`, `setup-saving`, `verify`, ...). Serve `.output/public` and screenshot at 390 px and desktop width. Never deploy a build made with that variable.
 
 ## Hardware spike
 
