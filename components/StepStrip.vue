@@ -29,7 +29,7 @@ import type { Step } from '~/composables/useSetup'
 const props = defineProps<{ step: Step, installSkipped: boolean }>()
 
 const ORDER: Array<{ id: string, label: string, steps: Step[] }> = [
-  { id: 'plug', label: 'Plug in', steps: ['plug', 'check', 'noanswer', 'refused'] },
+  { id: 'plug', label: 'Plug in', steps: ['plug', 'check', 'noanswer', 'refused', 'ready'] },
   { id: 'install', label: 'Install', steps: ['install'] },
   { id: 'name', label: 'Name', steps: ['name'] },
   { id: 'setup', label: 'Set up', steps: ['setup'] },

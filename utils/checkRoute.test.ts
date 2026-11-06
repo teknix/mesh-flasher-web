@@ -12,15 +12,21 @@ describe('routeAfterRead', () => {
     expect(routeAfterRead(undefined, boards, PIN)).toEqual({ kind: 'silent' })
     expect(answered(emptySnapshot())).toBe(false)
   })
-  it('answered on the pinned version → name, even when the handshake never finished', () => {
+  it('answered on the pinned version → ready (ask before applying), even when the handshake never finished', () => {
     const s = emptySnapshot()
     s.myNodeNum = 1
     s.hwModel = 110
     s.firmwareVersion = PIN
     s.configured = false // partial snapshot from a timed-out read
-    expect(routeAfterRead(s, boards, PIN)).toEqual({ kind: 'name', boardId: 'heltec-v4', have: PIN })
+    expect(routeAfterRead(s, boards, PIN)).toEqual({ kind: 'ready', boardId: 'heltec-v4', have: PIN, newer: false })
   })
-  it('answered on another version → install', () => {
+  it('answered on a newer version → ready, flagged newer; no re-flash', () => {
+    const s = emptySnapshot()
+    s.hwModel = 110
+    s.firmwareVersion = 'v2.8.1.0000000'
+    expect(routeAfterRead(s, boards, PIN)).toEqual({ kind: 'ready', boardId: 'heltec-v4', have: '2.8.1.0000000', newer: true })
+  })
+  it('answered on an older version → install', () => {
     const s = emptySnapshot()
     s.hwModel = 110
     s.firmwareVersion = 'v2.6.11.abc'

@@ -16,7 +16,7 @@ const config: GroupConfig = {
 
 export const PREVIEWS = [
   'plug', 'check', 'check-expired', 'noanswer', 'noanswer-after', 'install-dfu', 'install-connect', 'install-erase',
-  'install-write', 'install-firstboot', 'install-expired', 'name', 'setup', 'setup-saving', 'verify', 'verify-expired',
+  'install-write', 'install-firstboot', 'install-expired', 'ready', 'ready-newer', 'name', 'setup', 'setup-saving', 'verify', 'verify-expired',
 ] as const
 
 export function applyPreview(state: State, name: string) {
@@ -89,6 +89,13 @@ export function applyPreview(state: State, name: string) {
     case 'name':
       state.step = 'name'
       state.checked = true
+      break
+    case 'ready':
+    case 'ready-newer':
+      state.step = 'ready'
+      state.checked = true
+      state.readyNewer = name === 'ready-newer'
+      state.snapshot = { channels: {}, configured: false, firmwareVersion: name === 'ready' ? '2.7.26.54e0d8d' : '2.8.1.0000000', hwModel: 110 }
       break
     case 'setup':
     case 'setup-saving': {

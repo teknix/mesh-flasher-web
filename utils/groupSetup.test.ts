@@ -44,8 +44,19 @@ describe('buildPlan', () => {
     expect((slotted.lora.payloadVariant.value as Protobuf.Config.Config_LoRaConfig).channelNum).toBe(20)
     expect(v.txEnabled).toBe(true)
   })
-  it('turns WiFi off and sets the role', () => {
-    expect((plan.network.payloadVariant.value as Protobuf.Config.Config_NetworkConfig).wifiEnabled).toBe(false)
+  it('turns WiFi off, clears any stored WiFi login, and sets the role', () => {
+    const net = plan.network.payloadVariant.value as Protobuf.Config.Config_NetworkConfig
+    expect(net.wifiEnabled).toBe(false)
+    expect(net.wifiSsid).toBe('')
+    expect(net.wifiPsk).toBe('')
+    // A radio that arrives with someone's home WiFi on it loses it.
+    const base = emptySnapshot()
+    base.network = create(Protobuf.Config.Config_NetworkConfigSchema, { wifiEnabled: true, wifiSsid: 'HomeNet', wifiPsk: 'hunter2', ntpServer: 'pool.ntp.org' })
+    const withBase = buildPlan(config, names, base).network.payloadVariant.value as Protobuf.Config.Config_NetworkConfig
+    expect(withBase).toMatchObject({ wifiEnabled: false, wifiSsid: '', wifiPsk: '', ntpServer: 'pool.ntp.org' })
+    const stale = emptySnapshot()
+    stale.network = base.network
+    expect(compareSnapshot(plan, stale).fields.find(f => f.id === 'network.wifiCleared')?.status).toBe('mismatch')
     expect((plan.device.payloadVariant.value as Protobuf.Config.Config_DeviceConfig).role).toBe(Protobuf.Config.Config_DeviceConfig_Role.CLIENT)
   })
   it('builds MQTT config with the phone bridge on', () => {

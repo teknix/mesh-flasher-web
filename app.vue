@@ -18,6 +18,7 @@
       <StepNoAnswer v-else-if="state.step === 'noanswer'" />
       <StepRefused v-else-if="state.step === 'refused'" />
       <StepInstall v-else-if="state.step === 'install'" />
+      <StepReady v-else-if="state.step === 'ready'" />
       <StepName v-else-if="state.step === 'name'" />
       <StepSetup v-else-if="state.step === 'setup'" />
       <StepVerify v-else-if="state.step === 'verify'" />

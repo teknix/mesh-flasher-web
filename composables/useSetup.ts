@@ -12,7 +12,7 @@ import { startCountdown, type Countdown } from '~/utils/countdown'
 import { RADIO_USB_FILTERS } from '~/utils/usb'
 import { openPortWithRetry } from '~/utils/serialTransport'
 
-export type Step = 'loading' | 'gate' | 'signin' | 'plug' | 'check' | 'noanswer' | 'refused' | 'install' | 'name' | 'setup' | 'verify' | 'done'
+export type Step = 'loading' | 'gate' | 'signin' | 'plug' | 'check' | 'noanswer' | 'refused' | 'install' | 'ready' | 'name' | 'setup' | 'verify' | 'done'
 
 export const STEP_NAMES: Record<Step, string> = {
   loading: 'Loading',
@@ -23,6 +23,7 @@ export const STEP_NAMES: Record<Step, string> = {
   noanswer: 'The radio did not answer',
   refused: 'Radio not supported',
   install: 'Installing the radio\'s software',
+  ready: 'Radio is ready — apply the group settings?',
   name: 'Your name',
   setup: 'Setting up your radio',
   verify: 'Checking it took',
@@ -70,6 +71,8 @@ const state = reactive({
   checked: false,
   /** The silent-radio screen: true when we got there right after installing the software. */
   afterInstall: false,
+  /** Ready screen: the radio's software is newer than the pinned version (still fine). */
+  readyNewer: false,
   dfuReady: false,
   installPhase: '' as '' | 'download' | FlashPhase | 'firstboot',
   installPercent: 0,
@@ -261,11 +264,24 @@ export function useSetup() {
         state.needsInstall = true
         state.dfuReady = false
         return go('install')
-      case 'name':
+      case 'ready':
         state.boardId = route.boardId
         state.needsInstall = false
-        return go('name')
+        state.readyNewer = route.newer
+        return go('ready')
     }
+  }
+
+  /** Ready screen: yes → on to the name. */
+  function applyConfig() {
+    go('name')
+  }
+
+  /** Ready screen: no → back to the start, nothing written. */
+  function leaveRadio() {
+    state.checked = false
+    go('plug')
+    state.pickerNote = 'Nothing was changed on the radio. You can unplug it.'
   }
 
   async function checkRadio() {
@@ -345,6 +361,7 @@ export function useSetup() {
       state.port = found.port
       state.snapshot = found.snapshot
       state.checked = true
+      // Freshly installed by us: no need to ask, the member came here to set it up.
       go('name')
     }
     catch (e) {
@@ -512,7 +529,7 @@ export function useSetup() {
 
   return {
     state, boards, board, helpContact, groupName, nameCheck, failedFields, installSkipped,
-    go, init, signInZulip, signInMatrix, pickRadio, checkRadio, installAnyway, installSoftware,
+    go, init, signInZulip, signInMatrix, pickRadio, checkRadio, installAnyway, installSoftware, applyConfig, leaveRadio,
     setLongName, setShortName, setupRadio, verifyRadio, checkMesh, stuckText, afterSignIn,
   }
 }

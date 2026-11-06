@@ -238,8 +238,10 @@ export function buildPlan(config: GroupConfig, names: Names, base?: Snapshot): P
       },
     },
   })
+  // Field mode: WiFi off, and no WiFi name/password left on the radio — a radio set up at
+  // someone's home before being handed over would otherwise carry their WiFi login forever.
   const network = create(C.ConfigSchema, {
-    payloadVariant: { case: 'network', value: { ...keep(base?.network), wifiEnabled: false } },
+    payloadVariant: { case: 'network', value: { ...keep(base?.network), wifiEnabled: false, wifiSsid: '', wifiPsk: '' } },
   })
   const device = create(C.ConfigSchema, {
     payloadVariant: { case: 'device', value: { ...keep(base?.device), role } },
@@ -297,6 +299,8 @@ export function buildPlan(config: GroupConfig, names: Names, base?: Snapshot): P
       ? [{ id: 'lora.channelNum', label: 'Frequency slot', expected: config.lora.channelNum, read: (s: Snapshot) => s.lora?.channelNum } as Expectation]
       : []),
     { id: 'network.wifiEnabled', label: 'WiFi off', expected: false, read: s => s.network?.wifiEnabled },
+    // Boolean on purpose: the result object must never carry a WiFi password, even an old one.
+    { id: 'network.wifiCleared', label: 'No WiFi login stored', expected: true, read: s => s.network ? !s.network.wifiSsid && !s.network.wifiPsk : undefined },
     { id: 'device.role', label: 'Radio role', expected: role, read: s => s.device?.role },
     { id: 'mqtt.enabled', label: 'Internet link on', expected: true, read: s => s.mqtt?.enabled },
     { id: 'mqtt.address', label: 'Internet link address', expected: m.address, read: s => s.mqtt?.address },
@@ -341,7 +345,7 @@ export interface PlanStep { id: string, label: string }
 export function planSteps(plan: Plan): PlanStep[] {
   return [
     { id: 'lora', label: 'Radio settings' },
-    { id: 'network', label: 'WiFi off' },
+    { id: 'network', label: 'WiFi off, no WiFi login kept' },
     { id: 'device', label: 'Radio role' },
     { id: 'mqtt', label: 'Internet link' },
     { id: 'owner', label: 'Your name' },
